@@ -2,10 +2,13 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
+using System.Windows.Forms.VisualStyles;
 using L10NSharp;
+using SayMore.Media.FFmpeg;
 using SIL.Extensions;
 using SIL.Reporting;
 using SayMore.Model.Files;
+using SayMore.Model.Files.DataGathering;
 using SayMore.Transcription.Model;
 using SayMore.UI.Overview;
 using SayMore.UI.ProjectChoosingAndCreating.NewProjectDialog;
@@ -14,6 +17,9 @@ using SIL.Archiving;
 using SIL.Archiving.Generic;
 using SIL.Archiving.IMDI;
 using SayMore.Properties;
+using SayMore.UI;
+using SayMore.UI.ComponentEditors;
+using SayMore.UI.ElementListScreen;
 using SIL.Archiving.IMDI.Lists;
 using SIL.Windows.Forms.ClearShare;
 using SIL.WritingSystems;
@@ -23,8 +29,11 @@ namespace SayMore.Model
 {
 	static class ArchivingHelper
 	{
+		internal static ArchivingLanguage _defaultLanguage;
 		internal static LanguageLookup _LanguageLookup = new LanguageLookup();
 		internal static Project Project = null; // Set for testing
+		internal static ConvertMediaDlgViewModel _viewModel;
+		internal static ComponentFile _file;
 
 		/// ------------------------------------------------------------------------------------
 		internal static void ArchiveUsingIMDI(IIMDIArchivable element)
@@ -65,6 +74,7 @@ namespace SayMore.Model
 					Program.CurrentProject.Save();
 				}
 			}
+			Program.CurrentProject.Load(); // Added this code for files refresh, but not working
 		}
 
 		/// ------------------------------------------------------------------------------------
@@ -326,39 +336,96 @@ namespace SayMore.Model
 			}
 
 			// session files
+			string theFile = string.Empty;
+			string fileNameNew = string.Empty;
 			var files = saymoreSession.GetSessionFilesToArchive(model.GetType());
 			foreach (var file in files)
 			{
-				if (file.EndsWith(Settings.Default.MetadataFileExtension, StringComparison.InvariantCulture))
+				theFile = file;
+				fileNameNew = string.Empty;
+				if (theFile.EndsWith(Settings.Default.MetadataFileExtension, StringComparison.InvariantCulture))
+				{
 					continue;
-				imdiSession.AddFile(CreateArchivingFile(file));
+				}
+
+				// if the file is a .mov file
+				if (theFile.ToLower().EndsWith(".mov", StringComparison.InvariantCulture))
+				{
+					// check if a corresponding .mp4 file exists
+					fileNameNew = theFile.Replace(".mov", ".mp4");
+					if (!File.Exists(fileNameNew))
+					{
+						if (FFmpegDownloadHelper.DoesFFmpegForSayMoreExist)
+						{
+							// convert the .mov file to .mp4 file
+							theFile = DoFileConversionMovToMp4(file);
+							// if there is a .meta file for the .mov file
+							if (File.Exists(file + Settings.Default.MetadataFileExtension))
+							{
+								// copy the .mov.meta file to .mp4.meta file
+								File.Copy(file + Settings.Default.MetadataFileExtension,
+									fileNameNew + Settings.Default.MetadataFileExtension);
+							}
+							// Refresh
+							//saymoreSession.Load();
+							//Project.GetAllSessions();
+							//ElementRepository<Session> sessionRepo = _sessionsRepoFactory(Path.GetDirectoryName(SettingsFilePath), Session.kFolderName, _sessionFileType);
+							//sessionRepo.RefreshItemList();
+							//ComponentFileGrid _sessionComponentFileGrid
+							var sessionComponentFileGrid = new SayMore.UI.ElementListScreen.ComponentFileGrid();
+							sessionComponentFileGrid.InitializeGrid("SessionScreen");
+							//SayMore.UI.ElementListScreen.ComponentFileGrid.ForceRefresh();
+							Program.CurrentProject.InitializeSessions();
+							// End Refresh - But the code is not refreshing the files list
+						}
+						else
+						{
+							//write to log when FFmpeg has not been installed
+							Logger.WriteEvent("FFmpeg for Saymore does not exist. Install it to convert .mov files to .mp4 files for archiving with IMDI");
+						}
+					}
+					else
+					{
+						continue;
+					}
+				}
+				imdiSession.AddFile(CreateArchivingFile(theFile));
 				var info = saymoreSession.GetComponentFiles()
-					.FirstOrDefault(componentFile => componentFile.PathToAnnotatedFile == file);
+					.FirstOrDefault(componentFile => componentFile.PathToAnnotatedFile == theFile);
 				if (info == null)
 					continue;
 				var notes = (from infoValue in info.MetaDataFieldValues
 					where infoValue.FieldId == "notes"
 					select infoValue.ValueAsString).FirstOrDefault();
 				if (!string.IsNullOrEmpty(notes))
-					imdiSession.AddFileDescription(file, new LanguageString { Value = notes, Iso3LanguageId = analysisLanguage });
+					imdiSession.AddFileDescription(theFile, new LanguageString { Value = notes, Iso3LanguageId = analysisLanguage });
 				if (!info.FileType.IsAudioOrVideo)
 					continue;
 				var duration = (from infoValue in info.MetaDataFieldValues
 					where infoValue.FieldId == "Duration"
 					select infoValue.ValueAsString).FirstOrDefault();
 				if (!string.IsNullOrEmpty(duration))
-					imdiSession.AddMediaFileTimes(file, "00:00:00", duration);
+					imdiSession.AddMediaFileTimes(theFile, "00:00:00", duration);
 				var device = (from infoValue in info.MetaDataFieldValues
 					where infoValue.FieldId == "Device"
 					select infoValue.ValueAsString).FirstOrDefault();
 				if (!string.IsNullOrEmpty(device))
-					imdiSession.AddFileKeyValuePair(file, "RecordingEquipment", device);
+					imdiSession.AddFileKeyValuePair(theFile, "RecordingEquipment", device);
 				var microphone = (from infoValue in info.MetaDataFieldValues
 					where infoValue.FieldId == "Microphone"
 					select infoValue.ValueAsString).FirstOrDefault();
 				if (!string.IsNullOrEmpty(microphone))
-					imdiSession.AddFileKeyValuePair(file, "RecordingEquipment", microphone);
+					imdiSession.AddFileKeyValuePair(theFile, "RecordingEquipment", microphone);
 			}
+		}
+
+		internal static string DoFileConversionMovToMp4(string fileName)
+		{
+			string newFileName = string.Empty;
+			_viewModel = new ConvertMediaDlgViewModel(fileName, "Convert to H.263/MPEG-4 video with AAC Audio");
+			_viewModel.BeginConversion(null);
+			newFileName = _viewModel.OutputFileCreated;
+			return newFileName;
 		}
 
 		internal static string AnalysisLanguage()

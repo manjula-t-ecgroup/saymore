@@ -13,6 +13,7 @@ using SayMore.Model.Fields;
 using SayMore.Model.Files;
 using SIL.Archiving;
 using SayMore.Properties;
+using SayMoreTests.Model.Files;
 using SIL.Media.Naudio;
 using SIL.Windows.Forms.ClearShare;
 using Session = SayMore.Model.Session;
@@ -30,6 +31,7 @@ namespace SayMoreTests.Utilities
 		private readonly Mock<ProjectElementComponentFile> _personMetaFile = new Mock<ProjectElementComponentFile>();
 		private readonly Mock<ProjectElementComponentFile> _fileMetaFile = new Mock<ProjectElementComponentFile>();
 		private string _mp3FullName = String.Empty;
+		private string _movFullName = String.Empty;
 
 		/// ------------------------------------------------------------------------------------
 		[SetUp]
@@ -75,7 +77,9 @@ namespace SayMoreTests.Utilities
 			File.CreateText(Path.Combine(folder, "ddo.session")).Close();
 			File.CreateText(Path.Combine(folder, "ddo.mpg")).Close();
 			_mp3FullName = Path.Combine(folder, "ddo.mp3");
+			_movFullName = Path.Combine(folder, "ddo.mov");
 			File.CreateText(_mp3FullName).Close();
+			File.CreateText(_movFullName).Close();
 			File.CreateText(Path.Combine(folder, "ddo.pdf")).Close();
 			_session = new DummySession(parentFolder, "ddo", _personInformant.Object);
 
@@ -565,6 +569,39 @@ namespace SayMoreTests.Utilities
 			Assert.AreEqual(sampleCode, val);
 		}
 
+
+		[Test]
+		public void AddIMDISession_CheckMovFileConversionToMP4File()
+		{
+			var model = AddIMDISessionTestSetup(out var imdiSession);
+			ArchivingHelper.AddIMDISession(_session, model.Object);
+			var files = _session.GetSessionFilesToArchive(model.GetType());
+			var filteredList = files.Where(i => i.EndsWith(".mp4")).ToList();
+		}
+
+		public delegate void ArchivingHelperDelegate(DummySession session, IMDIArchivingDlgViewModel model);
+
+		[Test]
+		public void AddIMDISession_Check()
+		{
+			string status = string.Empty;
+			var model = AddIMDISessionTestSetup(out var imdiSession);
+			var mockArchivingHelper = new Mock<IArchivingHelper>();
+			mockArchivingHelper.Setup(m => m.AddIMDI(_session, model)).Callback(() => {
+				status = "Done";
+			});
+			Assert.AreEqual(status, "Done");
+		}
+
+		[Test]
+		public void AddIMDISession_Check2()
+		{
+			string status = string.Empty;
+			var model = AddIMDISessionTestSetup(out var imdiSession);
+			var mockArchivingHelper = new Mock<ArchivingHelperWrapper>();
+			mockArchivingHelper.Object.AddIMDI2(_session,model);
+		}
+
 		private Mock<IMDIArchivingDlgViewModel> AddIMDISessionTestSetup(out Mock<SIL.Archiving.IMDI.Schema.Session> imdiSession, ComponentFile mediaFile = null)
 		{
 			var model = new Mock<IMDIArchivingDlgViewModel>(MockBehavior.Strict, "SayMore", "ddo", "ddo-session", "whatever",
@@ -642,5 +679,29 @@ namespace SayMoreTests.Utilities
 		}
 	}
 
+	public interface IArchivingHelper
+	{
+		void AddIMDI(DummySession session, Mock<IMDIArchivingDlgViewModel> model);
+		void AddIMDI2(DummySession session, Mock<IMDIArchivingDlgViewModel> model);
+	}
 
+	public class ArchivingHelperWrapper : IArchivingHelper
+	{
+		public void AddIMDI(DummySession session, Mock<IMDIArchivingDlgViewModel> model)
+		{
+			ArchivingHelper.AddIMDISession(session, model.Object);
+		}
+
+		public void AddIMDI2(DummySession session, Mock<IMDIArchivingDlgViewModel> model)
+		{
+			//ArchivingHelper.AddIMDISession(session, model.Object);
+			string status = string.Empty;
+			ArchivingHelperDelegate ahd = new ArchivingHelperDelegate(ArchivingHelper.AddIMDISession);
+			var mockedAhd = new Mock<ArchivingHelperDelegate>();
+			mockedAhd.Setup(m => m.Invoke(session, model.Object)).Callback(() => {
+				status = "Done";
+			});
+			Assert.AreEqual(status, "Done");
+		}
+	}
 }
